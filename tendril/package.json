@@ -1,0 +1,16 @@
+{
+  "name": "symbiote-tendril",
+  "version": "0.1.0",
+  "description": "Tendril jump-box client (Tails/LiveOS OTG)",
+  "main": "client.js",
+  "type": "module",
+  "scripts": {
+    "start": "node client.js",
+    "dev": "node client.js"
+  },
+  "dependencies": {
+    "socket.io-client": "^4.7.2",
+    "node-fetch": "^3.3.2",
+    "dotenv": "^16.3.1"
+  }
+}
