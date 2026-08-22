@@ -22,3 +22,7 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# Wiki
+wiki/.obsidian/
+wiki/*.pdf
