@@ -1,63 +1,24 @@
-# Environment
-.env
-.env.local
-.env.*.local
-
-# Secrets & private data
-.symbiote-brain/
-.jarvis-brain/
-.carnage/
-.opencode/
-tendril-client.env
-orchestratr/.env
-frontend/.env
-
-# Node
-node_modules/
-dist/
-.vite/
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+# Android / Gradle
+.gradle/
+build/
+*.apk
+*.apkm
+*.aab
+cmdline-tools/
+cmdline-tools.zip
+gradle-wrapper.jar
+local.properties
 
 # Python
 __pycache__/
 *.pyc
-.venv/
-venv/
-ml/models/
-*.onnx
+.env
+*.egg-info/
 
-# Build artifacts
-build/
-.gradle/
-.idea/
-*.apk
-*.aab
+# Node
+node_modules/
+dist/
 
 # OS
 .DS_Store
 Thumbs.db
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-
-# Editor
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.vim/
-
-# Testing
-coverage/
-.nyc_output/
-
-# Temp
-/tmp/
-/temp/
-*.tmp

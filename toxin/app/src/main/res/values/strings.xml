@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Symbiote To</string>
+    <string name="activity_name">Symbiote To</string>
+    
+    <!-- Status strings -->
+    <string name="status_scaffolded">Scaffolded</string>
+    <string name="status_pending">Pending</string>
+    <string name="status_configured">Configured</string>
+    
+    <!-- Component descriptions -->
+    <string name="microg_status">microG: ✅ Configured</string>
+    <string name="syncthing_status">Syncthing: Pending</string>
+    <string name="shelter_status">Shelter: Pending</string>
+    <string name="tor_status">Tor: Pending</string>
+</resources>
