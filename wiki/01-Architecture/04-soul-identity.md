@@ -45,6 +45,7 @@ Soul (persistent identity state)
 | `byte2byte_items` | number | Count of byte2byte action items |
 | `tdlr_items` | number | Count of tdlr checklist items |
 | `papers_reviewed` | number | Total papers processed today |
+| `brains_active` | string[] | Active agent brains: hermes, codex, copilot |
 
 ### 3. MCP Configuration (`~/.hermes/config.yaml`)
 - **Purpose:** Tool permissions, model fallback chain, server configs
