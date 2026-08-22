@@ -1,0 +1,95 @@
+name: Wiki Sync
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'wiki/**'
+      - '.github/workflows/wiki-sync.yml'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force full re-sync'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync-wiki:
+    name: Sync wiki/ to GitHub Wiki
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y git
+
+      - name: Clone GitHub Wiki
+        env:
+          WIKI_TOKEN: ${{ secrets.WIKI_SYNC_TOKEN }}
+        run: |
+          git clone https://${{ secrets.WIKI_SYNC_TOKEN }}@github.com/MaliceHermes/symbiote-os.wiki.git /tmp/wiki 2>&1 || echo "Wiki repo may not exist yet"
+
+          if [ ! -d /tmp/wiki/.git ]; then
+            mkdir -p /tmp/wiki
+            cd /tmp/wiki
+            git init
+            git remote add origin https://${{ secrets.WIKI_SYNC_TOKEN }}@github.com/MaliceHermes/symbiote-os.wiki.git
+          fi
+
+      - name: Sync wiki files
+        run: |
+          echo "=== Files in wiki/ folder ==="
+          find wiki -type f | sort
+
+          echo "=== Syncing to GitHub Wiki ==="
+          find /tmp/wiki -maxdepth 1 -not -name '.git' -not -name '.' -exec rm -rf {} + 2>/dev/null || true
+
+          find wiki -type f -name "*.md" | while read -r file; do
+            basename=$(basename "$file" .md)
+            cp "$file" "/tmp/wiki/${basename}.md"
+            echo "  Copied: $file -> ${basename}.md"
+          done
+
+          if [ -f wiki/README.md ]; then
+            cp wiki/README.md /tmp/wiki/Home.md
+            echo "  Copied: wiki/README.md -> Home.md"
+          fi
+
+      - name: Check for changes
+        id: changes
+        run: |
+          cd /tmp/wiki
+          git add -A
+
+          if ! git diff --cached --quiet; then
+            echo "changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "changes=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Commit and push to GitHub Wiki
+        if: steps.changes.outputs.changes == 'true'
+        run: |
+          cd /tmp/wiki
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+          git commit -m "Wiki sync from main branch" 2>&1
+
+          git push origin master 2>&1 || echo "Push may have failed - check wiki settings"
+
+      - name: Report results
+        run: |
+          cd /tmp/wiki
+          echo "=== Wiki contents ==="
+          ls -la
