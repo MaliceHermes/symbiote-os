@@ -11,6 +11,7 @@ import { writeFile, readFile, appendFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import chalk from 'chalk';
+import { initializeSymbioteACL } from './carnage-acl.js';
 
 // Load .env
 dotenv.config({ path: path.resolve(process.env.ENV_PATH || '.env') });
@@ -18,6 +19,10 @@ dotenv.config({ path: path.resolve(process.env.ENV_PATH || '.env') });
 const PORT = process.env.ORCHESTRATOR_PORT || 3030;
 const HOST = process.env.ORCHESTRATOR_HOST || 'localhost';
 const HIVE_ROOT = process.env.SYMBIOTE_HIVE_ROOT || path.join(process.env.HOME, '.symbiote-brain');
+
+// ─── Carnage ACL: Initialize with Symbiote policies ─────────────────
+// Enforces Business-Private cage isolation (hermes uid 996 blocked)
+const carnage = initializeSymbioteACL();
 
 const app = express();
 const server = http.createServer(app);
@@ -60,13 +65,70 @@ app.get('/api/info', (req, res) => {
 // Hive endpoints
 app.get('/api/hive', (req, res) => {
   const cages = ['Life-OS', 'Business-Private', 'Claude-Brain'];
-  const structure = cages.map(cage => ({
-    name: cage,
-    path: path.join(HIVE_ROOT, cage),
-    locked: cage === 'Business-Private',
-    exists: existsSync(path.join(HIVE_ROOT, cage))
-  }));
+  const structure = cages.map(cage => {
+    const cagePath = path.join(HIVE_ROOT, cage);
+    const decision = carnage.validatePathAccess(cagePath);
+
+    return {
+      name: cage,
+      path: cagePath,
+      locked: cage === 'Business-Private',
+      exists: existsSync(cagePath),
+      // Carnage ACL: report access status for hermes user
+      access: decision.allowed ? 'read' : 'denied',
+      cage: decision.cage
+    };
+  });
   res.json({ cages: structure, root: HIVE_ROOT });
+});
+
+// Carnage ACL: Validate path access before any filesystem operation
+app.get('/api/hive/:path(*)', carnage.pathAccessMiddleware('path'), async (req, res) => {
+  try {
+    const requestedPath = path.join(HIVE_ROOT, req.params.path);
+    const fullPath = path.resolve(requestedPath);
+
+    if (!existsSync(fullPath)) {
+      return res.status(404).json({ error: 'Path not found' });
+    }
+
+    const data = await readFile(fullPath, 'utf-8');
+    res.json({ path: fullPath, content: data, carnage: req.carnageDecision });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Carnage ACL: Validate path write access
+app.post('/api/hive/:path(*)/write', carnage.pathAccessMiddleware('path'), async (req, res) => {
+  try {
+    const requestedPath = path.join(HIVE_ROOT, req.params.path);
+    const fullPath = path.resolve(requestedPath);
+
+    await writeFile(fullPath, req.body.content || '');
+    res.json({ success: true, path: fullPath, carnage: req.carnageDecision });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Carnage ACL: Endpoint to check path access decisions
+app.get('/api/acl/check', (req, res) => {
+  const { path: checkPath } = req.query;
+  if (!checkPath) {
+    return res.status(400).json({ error: 'path query param required' });
+  }
+
+  const decision = carnage.validatePathAccess(checkPath);
+  res.json({
+    allowed: decision.allowed,
+    cage: decision.cage,
+    user: decision.user,
+    uid: decision.uid,
+    is_hermes: decision.is_hermes,
+    path: decision.path,
+    decision_id: decision.decision_id
+  });
 });
 
 // Brain state
@@ -176,10 +238,15 @@ server.listen(PORT, HOST, () => {
   console.log(chalk.gray('    GET  /api/health       — health check'));
   console.log(chalk.gray('    GET  /api/info         — orchestrator info'));
   console.log(chalk.gray('    GET  /api/hive         — Hive cage structure'));
+  console.log(chalk.gray('    GET  /api/hive/:path   — read file from Hive (ACL-enforced)'));
+  console.log(chalk.gray('    POST /api/hive/:path/write — write file to Hive (ACL-enforced)'));
+  console.log(chalk.gray('    GET  /api/acl/check   — check path access decision'));
   console.log(chalk.gray('    GET  /api/brain-state  — brain-state.json'));
   console.log(chalk.gray('    GET  /api/chats        — chat history'));
   console.log(chalk.gray('    POST /api/chats        — save chat entry'));
   console.log(chalk.gray('    GET  /api/carnage      — audit log'));
   console.log(chalk.gray('    GET  /api/ollama/tags  — proxied Ollama'));
+  console.log();
+  console.log(chalk.green('  🔒 Carnage ACL initialized — Business-Private cage enforced'));
   console.log();
 });

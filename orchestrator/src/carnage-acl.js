@@ -1,12 +1,16 @@
 /**
  * Decidable Access Control List for Carnage Layer
  * Based on: Decidability in Multi-Agent Coordination (Horn clause semantics)
- * 
+ *
  * Implements a formal ACL using Horn clauses with bounded complexity evaluation.
  * Ensures that security policies are decidable and verifiable within finite time.
  */
 
 import crypto from 'crypto';
+import os from 'os';
+import path from 'path';
+import { readFile, appendFile, mkdir } from 'fs/promises';
+import { existsSync } from 'fs';
 
 /**
  * Horn clause based ACL system
@@ -21,6 +25,20 @@ export class DecidableACL {
     this.auditLog = [];           // Audit trail of all decisions
     this.maxEvaluationDepth = maxEvaluationDepth;  // Prevent infinite recursion
     this.evaluationCount = 0;     // Count evaluations for monitoring
+
+    // ─── Carnage ACL: Path-based access enforcement ─────────────────
+    // Enforce Business-Private cage isolation per AGENTS.md
+    this.HIVE_ROOT = process.env.SYMBIOTE_HIVE_ROOT ||
+      path.join(process.env.HOME || os.homedir(), '.symbiote-brain');
+
+    this.HERMES_UID = 996;  // Sandboxed agent user
+
+    // Paths that are BLOCKED for hermes user
+    this.blockedPaths = [
+      { pattern: /Business-Private/, cage: 'Business-Private', mode: '700' },
+      { pattern: /\.env$/, cage: '.env file', mode: '600' },
+      { pattern: /\.symbiote-brain\/.*\.json$/, cage: 'state file', mode: '600' },
+    ];
   }
 
   /**
@@ -31,7 +49,7 @@ export class DecidableACL {
   addRule(head, body = []) {
     // Normalize head to array
     const headArray = Array.isArray(head) ? head : [head];
-    
+
     this.rules.push({
       id: `rule_${this.rules.length}`,
       head: headArray,
@@ -39,7 +57,7 @@ export class DecidableACL {
       timestamp: new Date().toISOString(),
       complexity: this.calculateRuleComplexity(headArray, body)
     });
-    
+
     // Invalidate cache when rules change
     this.cache.clear();
   }
@@ -70,7 +88,7 @@ export class DecidableACL {
    */
   query(user, resource, action) {
     const queryKey = `${user}:${resource}:${action}`;
-    
+
     // Check cache first
     if (this.cache.has(queryKey)) {
       const cachedResult = this.cache.get(queryKey);
@@ -84,10 +102,10 @@ export class DecidableACL {
 
     // Build the query predicate
     const queryPredicate = `allow(${user}, ${resource}, ${action})`;
-    
+
     // Perform SLD resolution (backward chaining)
     const result = this.prove(queryPredicate, 0, []);
-    
+
     const endTime = Date.now();
 
     const decision = {
@@ -108,6 +126,127 @@ export class DecidableACL {
     this.cache.set(queryKey, decision);
 
     return decision;
+  }
+
+  /**
+   * Validate path-based access for the hermes system user
+   * Enforces Business-Private cage and .env file protection.
+   *
+   * @param {string} requestedPath - The filesystem path being accessed
+   * @param {string} user - The user making the request (default: from process)
+   * @returns {Object} { allowed, reason, cage, path, audit_entry }
+   */
+  validatePathAccess(requestedPath, user = 'hermes') {
+    const resolvedPath = path.resolve(requestedPath);
+    const hivePath = path.resolve(this.HIVE_ROOT);
+
+    // Check if path is within Hive
+    const isInHive = resolvedPath.startsWith(hivePath);
+
+    let blocked = false;
+    let cage = null;
+    let mode = null;
+
+    // Check against blocked path patterns
+    for (const rule of this.blockedPaths) {
+      if (rule.pattern.test(resolvedPath)) {
+        blocked = true;
+        cage = rule.cage;
+        mode = rule.mode;
+        break;
+      }
+    }
+
+    // Get current process UID
+    const currentUid = process.getuid();
+
+    const decision = {
+      allowed: !blocked,
+      path: resolvedPath,
+      cage,
+      expected_mode: mode,
+      user,
+      uid: currentUid,
+      hermes_uid: this.HERMES_UID,
+      is_hermes: currentUid === this.HERMES_UID,
+      in_hive: isInHive,
+      timestamp: new Date().toISOString(),
+      decision_id: `acl_${Math.random().toString(36).substring(7)}`
+    };
+
+    // Log to audit trail
+    const auditEntry = {
+      timestamp: decision.timestamp,
+      action: 'PATH_ACCESS',
+      user: decision.user,
+      uid: decision.uid,
+      path: decision.path,
+      blocked: !decision.allowed,
+      cage: decision.cage,
+      ...(decision.blocked ? {} : { allowed: true })
+    };
+
+    this.auditLog.push(auditEntry);
+
+    // If hermes user is trying to access blocked path, log explicit violation
+    if (blocked && currentUid === this.HERMES_UID) {
+      this.auditLog.push({
+        timestamp: new Date().toISOString(),
+        action: 'ACCESS_DENIED',
+        user: 'hermes',
+        uid: currentUid,
+        path: resolvedPath,
+        cage: cage,
+        blocked: true,
+        reason: `hermes (uid ${this.HERMES_UID}) attempted access to ${cage} (mode ${mode})`
+      });
+
+      console.error(
+        `[Carnage] ⚠️  ACCESS DENIED: hermes (uid ${this.HERMES_UID}) blocked from ${cage}: ${resolvedPath}`
+      );
+    }
+
+    // Write to .carnage_audit.log
+    this._writeAuditLog(auditEntry).catch(err => {
+      console.error('[Carnage] Failed to write audit log:', err.message);
+    });
+
+    decision.audit_entry = auditEntry;
+
+    return decision;
+  }
+
+  /**
+   * Express.js middleware for Carnage ACL path validation
+   * Use this to protect routes that access filesystem paths
+   *
+   * @param {string} pathParam - The query param or route param name containing the path to validate
+   * @returns {Function} Express middleware
+   */
+  pathAccessMiddleware(pathParam = 'path') {
+    return (req, res, next) => {
+      const requestedPath = req.params[pathParam] ||
+                           req.query[pathParam] ||
+                           req.body[pathParam];
+
+      if (!requestedPath) {
+        return next();
+      }
+
+      const decision = this.validatePathAccess(requestedPath);
+
+      if (!decision.allowed) {
+        return res.status(403).json({
+          error: 'ACCESS_DENIED',
+          reason: `Access to ${decision.cage} is forbidden`,
+          path: decision.path,
+          audit_id: decision.decision_id
+        });
+      }
+
+      req.carnageDecision = decision;
+      next();
+    };
   }
 
   /**
@@ -146,7 +285,7 @@ export class DecidableACL {
     // Try to match with rules
     for (const rule of this.rules) {
       const substitution = this.unify(goal, rule.head[0]);
-      
+
       if (substitution !== null) {
         // Prove the body of the rule
         const bodyProof = this.proveConjunction(
@@ -309,10 +448,13 @@ export class DecidableACL {
     let filtered = this.auditLog;
 
     if (filter.user) {
-      filtered = filtered.filter(e => e.query.user === filter.user);
+      filtered = filtered.filter(e => e.query?.user === filter.user || e.user === filter.user);
     }
     if (filter.decision) {
       filtered = filtered.filter(e => e.decision === filter.decision);
+    }
+    if (filter.action) {
+      filtered = filtered.filter(e => e.action === filter.action);
     }
     if (filter.since) {
       const sinceTime = new Date(filter.since).getTime();
@@ -356,7 +498,7 @@ export class DecidableACL {
     // Check 1: No rule should reference itself without progress
     for (const rule of this.rules) {
       const ruleHeadStr = rule.head[0];
-      const hasSelfReference = rule.body.some(b => 
+      const hasSelfReference = rule.body.some(b =>
         this.predicateHeadMatches(b, ruleHeadStr)
       );
       if (hasSelfReference) {
@@ -391,6 +533,21 @@ export class DecidableACL {
     const headName = head.split('(')[0];
     return predName === headName;
   }
+
+  /**
+   * Write audit entry to .carnage_audit.log file
+   * @private
+   */
+  async _writeAuditLog(entry) {
+    const auditPath = path.join(this.HIVE_ROOT, '.carnage_audit.log');
+    const dir = path.dirname(auditPath);
+
+    if (!existsSync(dir)) {
+      await mkdir(dir, { recursive: true });
+    }
+
+    await appendFile(auditPath, JSON.stringify(entry) + '\n');
+  }
 }
 
 /**
@@ -424,7 +581,29 @@ export function initializeDefaultACL() {
   return acl;
 }
 
+/**
+ * Initialize Carnage ACL with Symbiote OS-specific policies
+ * Enforces Business-Private cage isolation and .env redaction
+ */
+export function initializeSymbioteACL() {
+  const acl = initializeDefaultACL();
+
+  // Carnage-specific rule: hermes system user (uid 996) is blocked from Business-Private
+  acl.addRule('allow(User, Resource, Action)', [
+    'not_business_private(Resource)',
+    'action_type(Action, read)'
+  ]);
+
+  acl.addFact('role(hermes, agent)');
+  acl.addFact('hermes_uid(996)');
+  acl.addFact('not_business_private(Life-OS)');
+  acl.addFact('not_business_private(Claude-Brain)');
+
+  return acl;
+}
+
 export default {
   DecidableACL,
-  initializeDefaultACL
+  initializeDefaultACL,
+  initializeSymbioteACL
 };
